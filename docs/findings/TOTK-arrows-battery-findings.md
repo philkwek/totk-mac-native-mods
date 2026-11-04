@@ -1,5 +1,8 @@
 # TOTK 1.0.0: unlimited arrows and Zonai battery — findings
 
+> Maintained as part of <https://github.com/philkwek/totk-mac-native-mods>.
+> This document began as research; section 7 records the later implementation.
+
 Date: 2026-11-04. Build: `082CE09B06E33A123CB1E2770F5F9147709033DB` (1.0.0, native macOS).
 Scope: research only. The game-patch source, installed app, and real profile were not modified. A
 diagnostic read-only watchpoint mode in `games/totk/runtime/mem_scan.h` was used temporarily for the
