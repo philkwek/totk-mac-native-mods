@@ -206,7 +206,8 @@ launch of the candidate would apply those two existing features to the real save
 
 ## 7. Implementation status (2026-11-04)
 
-Implemented in `work/MacNativeGames-update` and built into the candidate app only:
+Implemented in the overlay's patch series (`patches/0001-gameplay-switches.patch`)
+and verified in a test build:
 
 - `games/totk/runtime/game_patches.c`
   - `unlimited-arrows.txt`: an 11-word veneer at `main+0x2393714` compares `x0` with
@@ -223,7 +224,7 @@ Implemented in `work/MacNativeGames-update` and built into the candidate app onl
   (new sites are 1.0.0-only), and a per-run `SETTINGS_TEST_DIR` in `tests/test_settings_panel.py` so the
   panel switches can read back their files.
 
-Verified in the candidate:
+Verified in a test build:
 
 - Runtime log: `unlimited arrows ... on, veneer at main+0x2aa6c50`; `unlimited battery ... on,
   main+0xb6b27c 540000a8 -> d503201f`.
@@ -247,7 +248,6 @@ Still open:
 - Arrow edge cases: pickup/purchase still add (the code preserves `+1`), multishot bows, and dropping or
   selling exactly one arrow.
 
-Safety: the verification used the copies `work/totk-gameplay-mods/profile-next` and
-`work/totk-gameplay-mods/settings-next`; the candidate app at
-`work/totk-gameplay-mods/Tears of the Kingdom.app` was updated, and the real profile and settings were not
-modified.
+Safety: the verification used copies of the profile and settings; the installed
+application and the real profile/settings were not modified. The screenshots
+referenced here are not included in this repository.

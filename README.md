@@ -40,6 +40,7 @@ cd totk-mac-native-mods
 
 ./scripts/bootstrap.sh          # fetch the pinned upstream commit into .upstream
 ./scripts/apply.sh              # apply the overlay
+./scripts/verify.sh             # apply-check and source tests; no game needed
 ./scripts/build.sh \
   --rom "/path/to/TOTK [0100F2C0115B6000][v0].xci" \
   --keys "$HOME/path/to/prod.keys"
