@@ -14,6 +14,7 @@ UPSTREAM_DIR=${UPSTREAM_DIR:-"$ROOT/.upstream"}
 
 python3 "$ROOT/tests/test_patch_series.py"
 python3 "$UPSTREAM_DIR/tests/test_patch_sites.py"
+sh "$ROOT/tests/test_installer.sh"
 "$ROOT/scripts/check-repo.sh"
 
 echo "verify: OK"

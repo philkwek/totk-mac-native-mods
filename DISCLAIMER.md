@@ -16,8 +16,9 @@ follow your local laws.
 
 This repository contains no game program, art, text, audio, shaders, keys,
 ROMs, saves, firmware, extracted or rewritten game modules, or built
-applications. The build scripts require *your* game file and *your* keys, and
-the resulting app contains your game data. **Do not share the built app.**
+applications. The full build requires *your* game file and *your* keys; the
+fast path updates the runtime of an app you already built. Either way, the
+resulting app contains your game data. **Do not share the built app.**
 
 ## Saves and game behavior
 

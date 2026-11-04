@@ -4,6 +4,20 @@ All notable changes to this overlay are recorded here. The mod release is
 separate from the upstream MacNativeGames commit; see `upstream.json` and
 `docs/compatibility.md`.
 
+## Unreleased
+
+- Add `Install Mods.command` and `scripts/install.sh`: a one-click installer
+  that updates the runtime of an existing TOTK 1.0.0 app in place, with no game
+  file or keys. It uses upstream's `update_runtime.py` and keeps the app's game
+  data and saves.
+- Keep the full build as a fallback for apps that are not 1.0.0 or cannot be
+  updated in place.
+- Rewrite the Quick Start for players who already installed TOTK: check the
+  version first, then run the installer; move the developer commands into a
+  manual section.
+- `build.sh` now selects `python3.14` or `python3.15` instead of relying on
+  whichever `python3` is first in `PATH`.
+
 ## v0.1.0 - 2026-11-04
 
 Initial release for **Tears of the Kingdom 1.0.0** on the pinned upstream commit

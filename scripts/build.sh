@@ -36,9 +36,21 @@ grep -q "unlimited arrows" "$UPSTREAM_DIR/games/totk/runtime/game_patches.c" || 
     exit 1
 }
 
+PYTHON=${PYTHON:-}
+if [ -z "$PYTHON" ]; then
+    for candidate in python3.14 python3.15; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON=$candidate
+            break
+        fi
+    done
+fi
+[ -n "$PYTHON" ] || PYTHON=python3
+
 mkdir -p "$(dirname "$OUT")" "$WORK"
 echo "build: app  $OUT"
 echo "build: work $WORK"
-python3 "$UPSTREAM_DIR/build_app.py" "$ROM" -k "$KEYS" --platform macos -o "$OUT" --work "$WORK"
+echo "build: python $PYTHON"
+"$PYTHON" "$UPSTREAM_DIR/build_app.py" "$ROM" -k "$KEYS" --platform macos -o "$OUT" --work "$WORK"
 echo "build: done: $OUT"
 echo "build: this app contains your own game data and keys-derived files. Do not share it."

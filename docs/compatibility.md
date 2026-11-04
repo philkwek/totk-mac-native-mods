@@ -17,6 +17,14 @@ Only **Tears of the Kingdom 1.0.0** is covered. The settings page shows
 means finding and verifying its instruction sites and adding a version-specific
 patch series; it is not a matter of reusing the 1.0.0 addresses.
 
+## Existing apps
+
+`Install Mods.command` updates the runtime of an existing 1.0.0 app in place
+with upstream's `update_runtime.py`. It does not touch the game data, saves,
+ROM or keys. Before changing anything it checks the app's rewritten code modules
+and game data against the pinned upstream commit. An app from another upstream
+version is refused safely; the installer then offers a separate 1.0.0 build.
+
 ## Feature status
 
 | Feature | Source-verified | In-game verified |

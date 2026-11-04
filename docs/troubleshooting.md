@@ -1,5 +1,69 @@
 # Troubleshooting
 
+## `Install Mods.command` will not open
+
+If the repository was downloaded as a ZIP, macOS may quarantine the script.
+Right-click `Install Mods.command`, choose **Open**, then **Open** again. A
+`git clone` does not have this problem.
+
+You can also run it from Terminal:
+
+```bash
+./scripts/install.sh
+```
+
+## The installer says my app is not 1.0.0
+
+These mods only work with Tears of the Kingdom **1.0.0**. On 1.1.2, 1.2.1 or
+1.4.3 the Gameplay rows say “Not in this version”.
+
+The installer can build a separate 1.0.0 app from your own 1.0.0 base game and
+`prod.keys`. It needs 20–40 minutes and about 25 GB. Your current app and saves
+stay where they are, but a 1.4.3 save may not open in the 1.0.0 app. Back up
+your profile first.
+
+## The installer asks for my game file and keys
+
+The fast path does not need them. The installer asks only when it has to build a
+separate 1.0.0 app, for example because your current app is 1.4.3 or its runtime
+cannot be updated in place.
+
+## The direct update did not work
+
+The runtime updater accepts apps built by MacNativeGames' `build_app.py` whose
+game data and rewritten code modules match the pinned upstream commit. It stops
+without changing the app if they do not. The installer then offers the full
+build path.
+
+If the app is running, quit it and try again. If the app is in a folder your
+user cannot write to, move it to `~/Applications` first.
+
+## The installer cannot find `TOTK_build`
+
+The fast path normally needs no work folder: the app carries the game data the
+runtime update checks. A work folder is needed only for an app made before the
+game-data folder existed, or when the startup shaders must be remade.
+
+If the installer asks, select the `TOTK_build` folder from the build that made
+the app (usually next to your game file). If you no longer have it, use the full
+build path instead.
+
+## The app opens but the switches do nothing
+
+- Check that the Gameplay page shows the switches. “Not in this version” means
+  the app is not 1.0.0.
+- Turn a switch on, then **restart the game**. The patches are applied before
+  the game starts; the panel says “(from the next launch)” until then.
+- Check the runtime log with `TOTK_DEBUG_LOG=1`. A line saying `left off` means
+  the instruction site did not match.
+
+## Where is the installer log?
+
+`~/Library/Logs/totk-mac-native-mods/install-<date>-<time>.log`
+
+Attach the relevant lines when reporting an issue. Do not upload ROMs, keys,
+saves, or screenshots of game content.
+
 ## The patch series does not apply
 
 The overlay is pinned to one upstream commit. If upstream moved, run:

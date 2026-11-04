@@ -16,8 +16,32 @@ This runs:
 - `scripts/apply.sh --check` against a fresh pinned upstream checkout.
 - `tests/test_patch_series.py` (series and expected-site checks).
 - the upstream `tests/test_patch_sites.py` with the overlay's additions.
+- `tests/test_installer.sh` (installer shell syntax and `--help`; no macOS
+  tools needed).
 - `scripts/check-repo.sh` (forbidden game data, keys, saves, built apps, large
   files).
+
+The installer's plan can be checked without changing anything:
+
+```sh
+./scripts/install.sh --dry-run \
+  --app "/Applications/Tears of the Kingdom.app" \
+  --work "$HOME/Games/TOTK_build"
+```
+
+## One-click installer record
+
+On 2026-11-04, `scripts/install.sh` was run against a **copy** of a TOTK 1.0.0
+app built from the pinned `933b6a0` commit:
+
+- First run: 417 s. Second run: 152 s.
+- `update_runtime.py` kept the app's game data, replaced the runtime, and the
+  app passed its `--check`.
+- `codesign --verify --strict` passed after the update.
+- The updated runtime contains `unlimited-durability.txt`,
+  `unlimited-health.txt`, `unlimited-arrows.txt` and `unlimited-battery.txt`.
+
+The test copy, not the only installed app, was updated.
 
 ## Manual test record
 

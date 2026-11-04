@@ -12,7 +12,7 @@ mkdir -p "$DIST"
 
 tar -czf "$DIST/$NAME.tar.gz" -C "$ROOT" \
     README.md LICENSE NOTICE DISCLAIMER.md CHANGELOG.md upstream.json \
-    patches scripts docs tests .github .gitignore
+    "Install Mods.command" patches scripts docs tests .github .gitignore
 
 if command -v sha256sum >/dev/null 2>&1; then
     (cd "$DIST" && sha256sum "$NAME.tar.gz" > SHA256SUMS)
