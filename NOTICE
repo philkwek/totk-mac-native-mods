@@ -1,0 +1,19 @@
+# Notice
+
+This repository is an **unofficial mod overlay** for MacNativeGames:
+
+- Upstream: https://github.com/ly05010419/MacNativeGames
+- Pinned upstream commit: `933b6a0d1438de160208a0a13eb5e8d7a2cb8094`
+- Upstream license: MIT (see `LICENSE`; the upstream project's own
+  `THIRD_PARTY_NOTICES.md` remains authoritative for its third-party code).
+
+The patch files contain portions of the upstream source code. The upstream
+copyright notice is retained in `LICENSE`.
+
+This repository contains no game program, art, text, audio, shaders, keys,
+ROMs, saves, firmware, extracted or rewritten game modules, or built
+applications. It is not affiliated with, endorsed by, or sponsored by
+MacNativeGames, Nintendo, or Apple.
+
+Tears of the Kingdom, Nintendo Switch, Mac, Metal, and other names are
+trademarks of their respective owners.

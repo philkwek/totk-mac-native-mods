@@ -1,0 +1,12 @@
+{
+  "upstream": "https://github.com/ly05010419/MacNativeGames",
+  "commit": "933b6a0d1438de160208a0a13eb5e8d7a2cb8094",
+  "totk_version": "1.0.0",
+  "build_id": "082CE09B06E33A123CB1E2770F5F9147709033DB",
+  "patch_series": "patches/series",
+  "tested": {
+    "platform": "macOS 26, Apple silicon",
+    "game": "Tears of the Kingdom 1.0.0",
+    "status": "durability and health verified; arrows consume-gate verified; battery gauge-verified, device test pending"
+  }
+}

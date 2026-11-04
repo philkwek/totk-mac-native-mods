@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a problem with an overlay switch or the build scripts.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload game files, keys, saves, firmware, ROMs, or screenshots of
+        game content. Issues that contain or request them will be removed.
+  - type: input
+    id: overlay
+    attributes:
+      label: Overlay release
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream commit
+      placeholder: 933b6a0d1438de160208a0a13eb5e8d7a2cb8094
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: TOTK version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and Apple silicon model
+      placeholder: macOS 26, M4
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings files
+      description: The four switch files and their contents.
+      placeholder: |
+        unlimited-durability.txt: off
+        unlimited-health.txt: off
+        unlimited-arrows.txt: on
+        unlimited-battery.txt: on
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant runtime log lines
+      description: The lines mentioning "unlimited" or "left off".
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have not attached and will not attach game files, keys, saves, or firmware.
+          required: true

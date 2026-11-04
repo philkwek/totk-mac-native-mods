@@ -1,0 +1,29 @@
+name: Mod request
+description: Suggest a gameplay mod or a new game-version port.
+title: "[mod] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload game files, keys, saves, firmware, or screenshots of game
+        content. Requests that contain or ask for them will be removed.
+  - type: input
+    id: idea
+    attributes:
+      label: The mod
+      description: What should it do, and in which game situation?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: TOTK version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Known code sites, related research, or a test idea.

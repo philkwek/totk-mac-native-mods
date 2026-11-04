@@ -1,0 +1,465 @@
+diff --git a/games/totk/runtime/game_patches.c b/games/totk/runtime/game_patches.c
+index 3cd712d..e8441a8 100644
+--- a/games/totk/runtime/game_patches.c
++++ b/games/totk/runtime/game_patches.c
+@@ -757,6 +757,153 @@ static void patch_pool_offset(Module *m) {
+ #endif
+ }
+ 
++#if defined(TOTK_GAME_V0)
++/* Optional gameplay switches (Mac settings panel): "Unlimited durability", "Unlimited health", "Unlimited arrows"
++   and "Unlimited battery". They sit on the instructions 1.0.0 itself uses to read or change the value:
++     - main+0x7c37a8  ldr w1,[x8,#8]   the equipped item's current durability. The publisher around it loops over the
++                                       equipment slots (index 0 the weapon, 3 the bow, 4 the shield: main+0x7c36dc and
++                                       main+0x7c36f0 feed the same read), so one site covers all three; verified on
++                                       2026-11-04 with a sword, a bow and a shield. The veneer copies [x8,#0x18] (the
++                                       separate maximum record, kept at +0x1838, 16 bytes after the current one) over
++                                       [+8] first, so it never falls.
++                                       Fused items use this durability; the Master Sword's energy does not (a separate
++                                       meter). The third record this function publishes (+0x1840, main+0x7c37cc) is a
++                                       different statistic (message 0x54dedbe, not 0x355c603) and is left alone.
++     - main+0x650414  ldr x8,[x0]      the life gauge's per-frame update starts by reading the object's type; the
++                                       veneer copies [x0,#0x18] (the maximum life, in quarter hearts) over [x0,#8] (the
++                                       current life) first, then runs the original load, so the update itself is
++                                       unchanged. Gloom, drowning, void-outs and scripted deaths do not go through this
++                                       value and are left as the game has them.
++     - main+0x2393714 add w10,w10,w1   the generic "current += delta" helper for value arrays. The bow consume path
++                                       (main+0xEF02D0) calls it with x0 = the arrow value-array descriptor,
++                                       [[main+0x4646C60]+0x138]+0xBC0, w1 = -1 and w2 = 0 (verified with a write
++                                       watchpoint on 2026-11-04: 13 -> 12 -> 11 on two shots). The veneer compares x0
++                                       with that descriptor and zeroes w1 only for the -1 consume; +1 pickups and
++                                       purchases still add, and every other item array is untouched. x16 is not used by
++                                       the helper, so it is the veneer's scratch register.
++     - main+0xb6b27c  b.hi            the battery gauge update (main+0xb6b1d8) loads the battery item's current maximum
++                                       into s9 and the gauge's current energy from [x19,#0x44], then skips the store
++                                       while maximum > current. NOP makes it fall through and store the real maximum
++                                       every frame, so the gauge follows battery upgrades (3000.0 for one cell,
++                                       24000.0 at eight) instead of hardcoding 3000.0. This is a gauge-level refill:
++                                       a Zonai device drain test has not been run yet (the available save has no
++                                       devices), so the switch must not be described as device-tested.
++   The site word is checked against the retail module before anything is written: a mismatch (a launch-time
++   TOTK_PCHTXT on the site, a module this table was not made for) leaves that switch off with a line in the log
++   instead of stopping the game. A site with a non-zero replacement is written directly; a zero replacement gets a
++   veneer. Off by default: no settings file, no settings folder, or a word other than on / 1 / true leaves the site
++   alone. Switching takes effect at the next start: the bytes are written before the module's text is sealed, never
++   while guest threads run. */
++static const GamePatch gameplay_sites[] = {
++    {0x7c37a8, 0xb9400901, 0, "unlimited durability: equipment current durability read (w1 = [x8,#8])"},
++    {0x650414, 0xf9400008, 0, "unlimited health: current life read (x8 = [x0])"},
++    {0x2393714, 0x0b01014a, 0, "unlimited arrows: value-array add at the arrow consume call (w10 += w1)"},
++    {0xb6b27c, 0x540000a8, 0xd503201f, "unlimited battery: gauge clamp b.hi -> nop"},
++};
++
++static void gameplay_veneer(Module *m, uint64_t at, const uint32_t *code, unsigned n, const char *what) {
++    for (unsigned i = 0; i < n; i++) {
++        uint32_t have;
++        memcpy(&have, m->base + at + 4 * i, 4);
++        if (have) {
++            fprintf(stderr, "[totk] %s: main's text padding at main+%#llx is not empty (%08x)\n", what,
++                    (unsigned long long)(at + 4 * i), have);
++            runtime_fail("gameplay switch veneer: text padding not empty");
++        }
++    }
++    for (unsigned i = 0; i < n; i++) put_word(m, at + 4 * i, code[i], what);
++}
++
++static int gameplay_durability_active, gameplay_health_active, gameplay_arrows_active, gameplay_battery_active;
++int runtime_gameplay_active(int which) {   /* settings panel: 0 durability, 1 health, 2 arrows, 3 battery; in force now */
++    switch (which) {
++    case 0: return gameplay_durability_active;
++    case 1: return gameplay_health_active;
++    case 2: return gameplay_arrows_active;
++    case 3: return gameplay_battery_active;
++    default: return 0;
++    }
++}
++
++static int gameplay_apply(Module *m, const GamePatch *site, uint64_t at, const uint32_t *code, unsigned n) {
++    uint32_t have;
++    memcpy(&have, m->base + site->offset, 4);
++    if (have != site->original) {
++        fprintf(stderr, "[totk] %s: main+%#llx holds %08x, expected %08x; left off\n", site->what,
++                (unsigned long long)site->offset, have, site->original);
++        return 0;
++    }
++    gameplay_veneer(m, at, code, n, site->what);
++    put_word(m, site->offset, branch_to(site->offset, at), site->what);
++    fprintf(stderr, "[totk] %s: %s on, veneer at main+%#llx\n", TOTK_GAME_VERSION, site->what,
++            (unsigned long long)at);
++    return 1;
++}
++
++/* A switch whose whole patch is one instruction (the battery clamp): the replacement is written over the site. */
++static int gameplay_word(Module *m, const GamePatch *site) {
++    uint32_t have;
++    memcpy(&have, m->base + site->offset, 4);
++    if (have != site->original) {
++        fprintf(stderr, "[totk] %s: main+%#llx holds %08x, expected %08x; left off\n", site->what,
++                (unsigned long long)site->offset, have, site->original);
++        return 0;
++    }
++    put_word(m, site->offset, site->replacement, site->what);
++    fprintf(stderr, "[totk] %s: %s on, main+%#llx %08x -> %08x\n", TOTK_GAME_VERSION, site->what,
++            (unsigned long long)site->offset, site->original, site->replacement);
++    return 1;
++}
++
++static void gameplay_switch(Module *m, const char *file, const GamePatch *site, uint64_t at,
++                            const uint32_t *code, unsigned n, int *active) {
++    if (!runtime_setting_on(file)) {
++        fprintf(stderr, "[totk] %s: off (%s is not on)\n", site->what, file);
++        return;
++    }
++    if (gameplay_apply(m, site, at, code, n)) *active = 1;
++}
++
++static void gameplay_word_switch(Module *m, const char *file, const GamePatch *site, int *active) {
++    if (!runtime_setting_on(file)) {
++        fprintf(stderr, "[totk] %s: off (%s is not on)\n", site->what, file);
++        return;
++    }
++    if (gameplay_word(m, site)) *active = 1;
++}
++
++static void patch_gameplay_switches(Module *m) {
++    /* After the cloth (3 x 17 words) and trampoline (5 words) veneers, still inside the text padding before rodata.
++       Durability at +0x200, health at +0x220, arrows at +0x240 (11 words, 44 bytes). */
++    const uint64_t base = ((m->text_end + 15) & ~15ULL) + 0x200, end = (m->text_end + 0xfff) & ~0xfffULL;
++    if (base + 0x80 > end) runtime_fail("gameplay switch veneer layout");
++    uint32_t durability[3] = {0xb9401901u /* ldr w1,[x8,#0x18] */, 0xb9000901u /* str w1,[x8,#8] */, 0};
++    durability[2] = branch_to(base + 8, gameplay_sites[0].offset + 4);
++    uint32_t health[4] = {0xb9401808u /* ldr w8,[x0,#0x18] */, 0xb9000808u /* str w8,[x0,#8] */,
++                          0xf9400008u /* ldr x8,[x0] (the site's original) */, 0};
++    health[3] = branch_to(base + 0x20 + 12, gameplay_sites[1].offset + 4);
++    /* The arrow gate: compare x0 with [[main+0x4646C60]+0x138]+0xBC0, then zero w1 only for a -1 delta. */
++    uint32_t arrows[11] = {
++        adrp_reg(16, (uintptr_t)m->base + base + 0x40, (uintptr_t)m->base + 0x4646000),
++        0xf9463210u,   /* ldr x16,[x16,#0xc60]       inventory manager */
++        0xf9409e10u,   /* ldr x16,[x16,#0x138]       item-count container */
++        0x912f0210u,   /* add x16,x16,#0xbc0         arrow value-array descriptor */
++        0xeb10001fu,   /* cmp x0,x16 */
++        0x54000081u,   /* b.ne 1f */
++        0x3100043fu,   /* cmn w1,#1                  only the -1 consume; +1 still adds */
++        0x54000041u,   /* b.ne 1f */
++        0x52800001u,   /* mov w1,#0 */
++        0x0b01014au,   /* add w10,w10,w1 (the replaced instruction) */
++        0,
++    };
++    arrows[10] = branch_to(base + 0x40 + 40, gameplay_sites[2].offset + 4);
++    gameplay_switch(m, "unlimited-durability.txt", &gameplay_sites[0], base, durability, 3, &gameplay_durability_active);
++    gameplay_switch(m, "unlimited-health.txt", &gameplay_sites[1], base + 0x20, health, 4, &gameplay_health_active);
++    gameplay_switch(m, "unlimited-arrows.txt", &gameplay_sites[2], base + 0x40, arrows, 11, &gameplay_arrows_active);
++    gameplay_word_switch(m, "unlimited-battery.txt", &gameplay_sites[3], &gameplay_battery_active);
++}
++#endif
++
+ void runtime_game_patches(Module *m) {
+     runtime_survey_init(m);
+     const size_t n = sizeof fps60_sites / sizeof fps60_sites[0];
+@@ -780,6 +927,9 @@ void runtime_game_patches(Module *m) {
+         return;
+     }
+     patch_pchtxt(m);   /* first: the runtime's own patches check the original words they replace */
++#if defined(TOTK_GAME_V0)
++    patch_gameplay_switches(m);   /* next, so a TOTK_PCHTXT on these sites is seen by the check above */
++#endif
+     if (realtime_enabled()) patch_realtime(m);
+     else fprintf(stderr,"[totk] real-time frame step off (TOTK_REALTIME=0)\n");
+     patch_render_res(m);
+diff --git a/games/totk/runtime/game_version.h b/games/totk/runtime/game_version.h
+index 9810bd9..2ff7142 100644
+--- a/games/totk/runtime/game_version.h
++++ b/games/totk/runtime/game_version.h
+@@ -133,6 +133,8 @@
+ #define GAME_ADDR_0xce3fec 0xbda798
+ #define GAME_OUTPUT_CALL_WORD 0x94000083u
+ #else
++/* 1.0.0 is the #else of the chain: name it so code and scripts/patch_sites.py can scope a 1.0.0-only site. */
++#define TOTK_GAME_V0 1
+ #define TOTK_GAME_VERSION "1.0.0"
+ #define TOTK_GAME_DIR "v0"
+ #define GAME_ACTOR_NAME 0x210
+diff --git a/games/totk/runtime/gamepad.m b/games/totk/runtime/gamepad.m
+index 47f7aa5..85ccb49 100644
+--- a/games/totk/runtime/gamepad.m
++++ b/games/totk/runtime/gamepad.m
+@@ -152,6 +152,16 @@ int runtime_setting_word(const char *name, char *word, size_t size) {
+     char path[4096];
+     return setting_read(name, word, size, path, sizeof path);
+ }
++/* The switches that must be read before the guest starts (game_patches.c, settings_panel.h): on, 1 or true, with
++   the blanks around the word dropped; anything else, a missing folder or no file at all is off. */
++int runtime_setting_on(const char *name) {
++    char word[32];
++    if (!runtime_setting_word(name, word, sizeof word)) return 0;
++    char *s = word, *end = word + strlen(word);
++    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
++    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) *--end = 0;
++    return !strcasecmp(s, "on") || !strcmp(s, "1") || !strcasecmp(s, "true");
++}
+ /* ... and saves one, as controller-type.txt is saved (the settings panel's controller rows). */
+ void runtime_setting_save(const char *name, const char *word, const char *what) { setting_write(name, word, what); }
+ /* The same for a setting both games share (shared_setting_path). */
+diff --git a/games/totk/runtime/runtime.h b/games/totk/runtime/runtime.h
+index f9ffef1..c87aeee 100644
+--- a/games/totk/runtime/runtime.h
++++ b/games/totk/runtime/runtime.h
+@@ -170,6 +170,8 @@ int runtime_gamepad_battery_percent(void);  /* runtime/gamepad.m, main thread: t
+ void runtime_gamepad_hid_battery(int left, int percent);   /* runtime/gamepad.m, any thread: a Switch controller's battery read from its HID reports (left: a paired set's left Joy-Con), -1 none */
+ int runtime_gamepad_battery_left_percent(void);  /* runtime/gamepad.m: a paired Joy-Con set's left one, -1 none; the percent above is then the right one */
+ int runtime_setting_word(const char *name, char *word, size_t size);   /* runtime/gamepad.m: a one-word setting file next to controls.txt; 1 read, 0 none */
++int runtime_setting_on(const char *name);   /* runtime/gamepad.m: 1 when that file says on, 1 or true (case ignored); 0 when it is absent, blank or anything else */
++int runtime_gameplay_active(int which);   /* game_patches.c: 1 when the unlimited-durability (0), unlimited-health (1), unlimited-arrows (2) or unlimited-battery (3) patch was applied at this start (1.0.0 only) */
+ void runtime_setting_save(const char *name, const char *word, const char *what);   /* runtime/gamepad.m: saves one; what names it in a failure line */
+ int runtime_shared_setting_word(const char *name, char *word, size_t size);   /* runtime/gamepad.m: the same, shared by both games (the folder above controls.txt's) */
+ void runtime_shared_setting_save(const char *name, const char *word, const char *what);
+diff --git a/games/totk/runtime/settings_panel.h b/games/totk/runtime/settings_panel.h
+index 89c8de9..b876f84 100644
+--- a/games/totk/runtime/settings_panel.h
++++ b/games/totk/runtime/settings_panel.h
+@@ -1,8 +1,8 @@
+ /* The settings panel (Mac; included by frontend.m): key 1 opens and closes it (runtime/input.c), Esc and its close
+-   button close it. User 2026-10-25: it replaces the shortcut keys 2-7 and their reminder box. PR #1210: three
+-   pages (Display, Input, Key bindings) chosen by the tabs at the top, or L1 / R1 on a controller; the version in the
+-   bottom-left corner instead of the overlay box; no key hints at the bottom. One row per setting, a pop-up menu, a switch
+-   or a slider, each applied at once:
++   button close it. User 2026-10-25: it replaces the shortcut keys 2-7 and their reminder box. PR #1210: pages chosen by
++   the tabs at the top, or L1 / R1 on a controller (Display, Gameplay, Input, Key bindings; Gameplay is 1.0.0 only); the
++   version in the bottom-left corner instead of the overlay box; no key hints at the bottom. One row per setting, a
++   pop-up menu, a switch or a slider, each applied at once:
+    Display
+      overlay              all / FPS + playtime / off               fps_overlay_set_hud_mode (gfx/nvn/fps_overlay.c)
+      FPS graph            switch, default on                 fps-graph.txt above the game's folder (both games)
+@@ -26,6 +26,25 @@
+                                                              are always the patched ones on the Mac (off: the stock AO,
+                                                              bit for bit), so every choice acts at once (user 2026-10-30);
+                                                              TOTK_SSAO / _STRENGTH / _RADIUS decide first (greyed out)
++   Gameplay (Tears of the Kingdom 1.0.0 only; the patches are written into main before the guest starts, so a change is kept
++   for the next launch and the title says so while it is not in force)
++     unlimited durability switch, default off                unlimited-durability.txt: the equipment state read copies the
++                                                             item's maximum durability over the current one; one read
++                                                             serves the weapon, the bow and the shield (verified on
++                                                             2026-11-04), and fused items use the same value; the Master
++                                                             Sword's energy is a separate meter
++     unlimited health     switch, default off                unlimited-health.txt: the life gauge update copies the
++                                                             maximum life over the current one (gloom, drowning,
++                                                             void-outs and scripted deaths are left as the game has them)
++     unlimited arrows     switch, default off                unlimited-arrows.txt: the arrow count's consume call passes
++                                                             a -1 delta to the value-array add helper; a veneer at
++                                                             main+0x2393714 zeroes only that delta (picked-up and
++                                                             bought arrows still add), so the HUD keeps the real count
++     unlimited battery    switch, default off                unlimited-battery.txt: the gauge update's clamp at
++                                                             main+0xb6b27c is nop'ed, so the gauge stores the battery
++                                                             item's current maximum every frame and follows upgrades.
++                                                             Gauge-level only: a Zonai device drain test is still
++                                                             needed before it is described as device-tested
+    Input
+      controller type      auto / Xbox / PlayStation / Switch runtime_gamepad_type_set (gamepad.m), saved
+      DualSense bow trigger switch                            runtime_triggers_choose (gamepad_feedback.m), saved in
+@@ -57,6 +76,7 @@
+    values again twice a second, so they always show what is in force. */
+ #pragma once
+ #include "totk_fps_limit.h"   /* totk_fps_limits: the frame lock choices */
++#include "game_version.h"     /* TOTK_GAME_V0: the gameplay switches are 1.0.0 code sites */
+ #include "../third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h"   /* the contribution file, TOTK_REPO_URL */
+ #include "contrib_submit.h"   /* gh_path, contrib_submit (shared with app/launcher.m) */
+ #include "aspect_math.h"     /* aspect_near, ASPECT_GAME */
+@@ -168,7 +188,7 @@ static void settings_restore_start(void) {
+  [NSRunLoop.mainRunLoop addTimer:settingsRestoreTimer forMode:NSRunLoopCommonModes];
+ }
+ 
+-enum { SETTINGS_PAGE_DISPLAY, SETTINGS_PAGE_INPUT, SETTINGS_PAGE_BINDINGS, SETTINGS_PAGES };
++enum { SETTINGS_PAGE_DISPLAY, SETTINGS_PAGE_GAMEPLAY, SETTINGS_PAGE_INPUT, SETTINGS_PAGE_BINDINGS, SETTINGS_PAGES };
+ static void settings_refresh_all(void);
+ static void settings_rebuild(void);
+ static void settings_pointer_used(void);
+@@ -333,6 +353,30 @@ static NSArray<TOTKSettingRow *> *settings_rows(void) {
+   ^int{return taa_enabled();},^(int v){taa_set(v);settings_save_int("graphics-taa.txt",v,"edge smoothing");})];
+  [rows addObject:settings_ssao_row()];
+  NSUInteger display=rows.count;
++ /* Gameplay (1.0.0 only): the optional patches are written into main before the guest starts (game_patches.c), so a
++    change is kept for the next launch; the title says so while the saved choice is not the one in force now. */
++#if defined(TOTK_GAME_V0)
++ static const struct { const char *file, *zh, *en; } gameplay_rows[] = {
++  {"unlimited-durability.txt","装备耐久不减","Unlimited durability"},
++  {"unlimited-health.txt","生命不减（伤害免疫）","Unlimited health"},
++  {"unlimited-arrows.txt","箭矢不减","Unlimited arrows"},
++  {"unlimited-battery.txt","电池不减","Unlimited battery"},
++ };
++ for(unsigned i=0;i<sizeof gameplay_rows/sizeof *gameplay_rows;i++){
++  const char *file=gameplay_rows[i].file,*what=gameplay_rows[i].en;
++  NSString *title=settings_text(gameplay_rows[i].zh,what);
++  if(runtime_setting_on(file)!=runtime_gameplay_active((int)i))
++   title=[title stringByAppendingString:settings_text("（下次启动生效）"," (from the next launch)")];
++  [rows addObject:settings_row(title,nil,nil,^int{return runtime_setting_on(file);},
++   ^(int v){runtime_setting_save(file,v?"on":"off",what);})];
++ }
++#else
++ [rows addObject:settings_fixed(settings_text("装备耐久不减","Unlimited durability"),settings_text("这个版本没有","Not in this version"))];
++ [rows addObject:settings_fixed(settings_text("生命不减（伤害免疫）","Unlimited health"),settings_text("这个版本没有","Not in this version"))];
++ [rows addObject:settings_fixed(settings_text("箭矢不减","Unlimited arrows"),settings_text("这个版本没有","Not in this version"))];
++ [rows addObject:settings_fixed(settings_text("电池不减","Unlimited battery"),settings_text("这个版本没有","Not in this version"))];
++#endif
++ NSUInteger gameplay=rows.count;
+  /* Input */
+  TOTKSettingRow *pad=settings_row(settings_text("手柄类型","Controller type"),@[settings_pad_auto_text(),@"Xbox",@"PlayStation",@"Switch"],
+   @[@(GAMEPAD_TYPE_AUTO),@(GAMEPAD_TYPE_XBOX),@(GAMEPAD_TYPE_PLAYSTATION),@(GAMEPAD_TYPE_SWITCH)],
+@@ -348,7 +392,7 @@ static NSArray<TOTKSettingRow *> *settings_rows(void) {
+  [rows addObject:settings_feedback_row(0)];
+  [rows addObject:settings_gain_row()];
+  [rows addObject:settings_feedback_row(1)];
+- for(NSUInteger i=0;i<rows.count;i++)rows[i].page=i<display?SETTINGS_PAGE_DISPLAY:SETTINGS_PAGE_INPUT;
++ for(NSUInteger i=0;i<rows.count;i++)rows[i].page=i<display?SETTINGS_PAGE_DISPLAY:i<gameplay?SETTINGS_PAGE_GAMEPLAY:SETTINGS_PAGE_INPUT;
+  return rows;
+ }
+ 
+@@ -522,10 +566,11 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
+        SETTINGS_CELL_W = 118, SETTINGS_CELL_GAP = 6, SETTINGS_BIND_ROW_H = 28, SETTINGS_SECTION_H = 24 };
+ -(instancetype)init{
+  NSArray<TOTKSettingRow *> *rows=settings_rows();
+- NSUInteger perPage[2]={0,0};for(TOTKSettingRow *r in rows)perPage[r.page]++;
++ NSUInteger perPage[SETTINGS_PAGES-1]={0};for(TOTKSettingRow *r in rows)perPage[r.page]++;
+  /* The rows close up (down to 24 pt, 2 pt apart: a 26 pt menu then meets the next one's edge) when the panel would not fit the window (21:9 or 32:9 on a laptop
+     screen), so its title, close button, tabs and first rows stay in view. */
+- CGFloat n=MAX(perPage[0],perPage[1]),rowH=SETTINGS_ROW_H,gap=SETTINGS_GAP,room=window?window.contentView.bounds.size.height-8:CGFLOAT_MAX;
++ NSUInteger widest=0;for(NSUInteger p=0;p<SETTINGS_PAGES-1;p++)widest=MAX(widest,perPage[p]);
++ CGFloat n=widest,rowH=SETTINGS_ROW_H,gap=SETTINGS_GAP,room=window?window.contentView.bounds.size.height-8:CGFLOAT_MAX;
+  if(n&&SETTINGS_TOP+n*(rowH+gap)-gap+SETTINGS_BOTTOM>room){gap=2;rowH=fmax(24,floor((room-SETTINGS_TOP-SETTINGS_BOTTOM+gap)/n-gap));}
+  /* The key bindings drawings need a wider, taller panel (PR #1210); it is made at that size while they are shown. */
+  BOOL drawings=settings_drawings_for(g_settings_page);
+@@ -541,11 +586,11 @@ enum { SETTINGS_W = 600, SETTINGS_ROW_H = 34, SETTINGS_GAP = 6, SETTINGS_TOP = 9
+  title.textColor=NSColor.whiteColor;title.frame=NSMakeRect(18,h-38,300,24);[self addSubview:title];
+  NSButton *close=[NSButton buttonWithTitle:@"✕" target:self action:@selector(close:)];close.bordered=NO;close.refusesFirstResponder=YES;
+  close.font=[NSFont systemFontOfSize:15 weight:NSFontWeightBold];close.contentTintColor=NSColor.whiteColor;close.frame=NSMakeRect(W-40,h-40,28,28);[self addSubview:close];
+- NSSegmentedControl *tabs=[NSSegmentedControl segmentedControlWithLabels:@[settings_text("画面","Display"),settings_text("输入","Input"),settings_text("按键设置","Key bindings")]
++ NSSegmentedControl *tabs=[NSSegmentedControl segmentedControlWithLabels:@[settings_text("画面","Display"),settings_text("玩法","Gameplay"),settings_text("输入","Input"),settings_text("按键设置","Key bindings")]
+   trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(tabChanged:)];
+  tabs.segmentDistribution=NSSegmentDistributionFillEqually;tabs.refusesFirstResponder=YES;tabs.frame=NSMakeRect(14,h-80,W-28,26);[self addSubview:tabs];self.tabs=tabs;
+  NSMutableArray<NSView *> *pages=[NSMutableArray array];
+- for(NSInteger p=0;p<2;p++){
++ for(NSInteger p=0;p<SETTINGS_PAGES-1;p++){
+   NSView *page=[[NSView alloc] initWithFrame:NSMakeRect(0,SETTINGS_BOTTOM,W,body)];NSUInteger k=0;
+   for(TOTKSettingRow *r in rows){
+    if(r.page!=p)continue;
+diff --git a/games/totk/scripts/patch_sites.py b/games/totk/scripts/patch_sites.py
+index 930eee4..4e2f26b 100644
+--- a/games/totk/scripts/patch_sites.py
++++ b/games/totk/scripts/patch_sites.py
+@@ -31,8 +31,9 @@ RUNTIME = ROOT / 'runtime'
+ REWRITER = ROOT / 'third_party/d2r/patch_nso.py'
+ 
+ VERSIONS = ('v0', 'v112', 'v121', 'v143')
+-# The #if guard that selects a version's block in game_version.h / game_patches.c; 1.0.0 is the #else block.
+-GUARDS = {'v112': 'TOTK_GAME_V112', 'v121': 'TOTK_GAME_V121', 'v143': 'TOTK_GAME_V143'}
++# The #if guard that selects a version's block in game_version.h / game_patches.c; 1.0.0 is the #else block and its
++# own guard (TOTK_GAME_V0 in game_version.h) scopes 1.0.0-only patch tables the same way.
++GUARDS = {'v0': 'TOTK_GAME_V0', 'v112': 'TOTK_GAME_V112', 'v121': 'TOTK_GAME_V121', 'v143': 'TOTK_GAME_V143'}
+ # The version-specific patch source (game_patches.c is shared by 1.0.0, 1.1.2 and 1.2.1).
+ PATCHER = {'v0': 'game_patches.c', 'v112': 'game_patches.c', 'v121': 'game_patches.c', 'v143': 'game_patches_v143.c'}
+ 
+diff --git a/tests/settings_panel_probe.m b/tests/settings_panel_probe.m
+index 4a190a1..986973a 100644
+--- a/tests/settings_panel_probe.m
++++ b/tests/settings_panel_probe.m
+@@ -56,6 +56,16 @@ int runtime_setting_word(const char *name, char *word, size_t size) {
+     char path[4096]; snprintf(path, sizeof path, "%s/%s", dir, name); FILE *f = fopen(path, "r"); if (!f) return 0;
+     size_t n = fread(word, 1, size - 1, f); word[n] = 0; fclose(f); return 1;
+ }
++/* runtime/gamepad.m's on / 1 / true reader (unlimited-durability.txt and unlimited-health.txt). */
++int runtime_setting_on(const char *name) {
++    char word[32];
++    if (!runtime_setting_word(name, word, sizeof word)) return 0;
++    char *s = word, *end = word + strlen(word);
++    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
++    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) *--end = 0;
++    return !strcasecmp(s, "on") || !strcmp(s, "1") || !strcasecmp(s, "true");
++}
++/* runtime_gameplay_active comes from game_patches.c (included by settings_output_fixture.c). */
+ static int sharedSaves;   /* saves of a setting both games share (runtime_shared_setting_save) */
+ void runtime_shared_setting_save(const char *name, const char *word, const char *what) { sharedSaves++; runtime_setting_save(name, word, what); }
+ int runtime_shared_setting_word(const char *name, char *word, size_t size) { return runtime_setting_word(name, word, size); }
+@@ -265,7 +275,7 @@ int main(int argc, const char **argv) { @autoreleasepool {
+     runtime_input_key_synthetic(18, 1); runtime_input_key_synthetic(18, 1); tick(); runtime_input_key_synthetic(18, 0); tick();
+     assert(settingsOpen && fakeSettingsCapture && settingsPanel && !settingsPanel.hidden && settingsPanel.superview == window.contentView);
+     assert(NSContainsRect(window.contentView.bounds, settingsPanel.frame));
+-    assert(settingsPanel.allRows.count == 15);
++    assert(settingsPanel.allRows.count == 19);
+ 
+     /* FPS graph: a switch (here off at start; frontend.m turns it on when nothing is saved), kept in fps-graph.txt
+        that both games share (user 2026-10-29). */
+@@ -274,6 +284,31 @@ that both games share (user 2026-10-29). */
+     flip(@"FPS graph", YES); assert(fpsGraphEnabled && !strcmp(savedName, "fps-graph.txt") && !strcmp(savedWord, "on") && sharedSaves == shared0 + 1);
+     flip(@"FPS graph", NO); assert(!fpsGraphEnabled && !strcmp(savedWord, "off") && sharedSaves == shared0 + 2);
+ 
++#if defined(TOTK_GAME_V0)
++    /* Gameplay: the four patches start off, are independent, keep their own file and take only on / 1 / true. */
++    assert(!row(@"Unlimited durability").get() && !row(@"Unlimited health").get());
++    assert(!row(@"Unlimited arrows").get() && !row(@"Unlimited battery").get());
++    flip(@"Unlimited durability", YES);
++    assert(!strcmp(savedName, "unlimited-durability.txt") && !strcmp(savedWord, "on"));
++    assert(row(@"Unlimited durability").get() && !row(@"Unlimited health").get());
++    flip(@"Unlimited health", YES); assert(row(@"Unlimited health").get());
++    flip(@"Unlimited durability", NO); assert(!row(@"Unlimited durability").get() && row(@"Unlimited health").get());
++    flip(@"Unlimited arrows", YES);
++    assert(!strcmp(savedName, "unlimited-arrows.txt") && !strcmp(savedWord, "on"));
++    assert(row(@"Unlimited arrows").get() && !row(@"Unlimited battery").get());
++    flip(@"Unlimited battery", YES);
++    assert(!strcmp(savedName, "unlimited-battery.txt") && !strcmp(savedWord, "on"));
++    assert(row(@"Unlimited arrows").get() && row(@"Unlimited battery").get());
++    flip(@"Unlimited arrows", NO);
++    assert(!row(@"Unlimited arrows").get() && row(@"Unlimited battery").get());
++    runtime_setting_save("unlimited-durability.txt", "yes", "test");        /* neither on, 1 nor true: off */
++    assert(!row(@"Unlimited durability").get());
++    runtime_setting_save("unlimited-durability.txt", " true ", "test");     /* blanks around the word are dropped */
++    assert(row(@"Unlimited durability").get());
++    flip(@"Unlimited durability", NO);
++    flip(@"Unlimited battery", NO);
++#endif
++
+     /* Overlay: all -> FPS + playtime -> off; the corner box follows. */
+     hud_publish(HUD_FPS, "FPS 60  2560x1440", 0); hud_publish(HUD_SHADER, "New shaders 3 / total 9", 0);
+     shows(@"Overlay", @"All (FPS, shaders, load, playtime)");
+diff --git a/tests/test_patch_sites.py b/tests/test_patch_sites.py
+index 5032f08..fd2ebe6 100644
+--- a/tests/test_patch_sites.py
++++ b/tests/test_patch_sites.py
+@@ -42,6 +42,23 @@ class Extraction(unittest.TestCase):
+         self.assertNotIn(0x9d1e64, found)               # a 1.1.2 cloth address
+         self.assertNotIn(0xce3fec + 1, found)           # only the instruction itself is a site
+ 
++    def test_gameplay_switch_sites_are_1_0_0_only(self):
++        # The settings panel's "Unlimited durability" / "Unlimited health" / "Unlimited arrows" / "Unlimited battery"
++        # patches (game_patches.c) replace these instructions before the guest starts: a build-time mod that changed one
++        # is refused, and no other version reserves them (their code differs; the switch rows there say "not in this
++        # version").
++        v0 = offsets('v0', BUILD_ID_V0)
++        self.assertIn(0x7c37a8, v0)                     # equipment state: current durability read
++        self.assertIn(0x650414, v0)                     # life gauge update: current life read
++        self.assertIn(0x2393714, v0)                    # value-array add at the arrow consume call
++        self.assertIn(0xb6b27c, v0)                     # battery gauge clamp
++        for version in ('v112', 'v121', 'v143'):
++            found = offsets(version, BUILD_ID_V0)
++            self.assertNotIn(0x7c37a8, found)
++            self.assertNotIn(0x650414, found)
++            self.assertNotIn(0x2393714, found)
++            self.assertNotIn(0xb6b27c, found)
++
+     def test_the_20_byte_build_id_the_build_passes_is_the_same_list(self):
+         # mod_exefs.py reads the 20 bytes the runtime compares; the tables are keyed on the first 16, and the
+         # rewriter's cuts must still arrive (a 40-hex id used to match nothing and silently drop them).
+diff --git a/tests/test_settings_panel.py b/tests/test_settings_panel.py
+index 410c299..faf02f2 100644
+--- a/tests/test_settings_panel.py
++++ b/tests/test_settings_panel.py
+@@ -43,8 +43,11 @@ class SettingsPanel(unittest.TestCase):
+                 for layout in ('compact', 'corners'):
+                     for overridden in (False, True):
+                         with self.subTest(version=version, layout=layout, overridden=overridden):
++                            panel_settings = Path(directory) / f'panel-{version or "base"}-{layout}-{int(overridden)}'
++                            panel_settings.mkdir()
+                             env = os.environ.copy()
+                             env.update(TOTK_UI_LANG='en', TOTK_HUD=layout,
++                                       SETTINGS_TEST_DIR=str(panel_settings),
+                                        TOTK_MFX='interp' if overridden else '0',
+                                        TOTK_MFX_OUTPUT='1' if overridden else '0',
+                                        TOTK_MFX_UPSCALE='0', TOTK_TAA='0')
